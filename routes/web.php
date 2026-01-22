@@ -3,10 +3,9 @@
 use Illuminate\Support\Facades\Route;
 
 Route::get('/test', function () {
-   
-return  response()->json(['message' => 'Test route is working!']);
+    return response()->json([
+        'message' => 'Welcome to the Job Board API'
+    ]);
 });
 
-Route::get('/' , function () {
-    return view('welcome');
-});
+require __DIR__ . '/auth.php';
