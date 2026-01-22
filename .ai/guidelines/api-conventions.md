@@ -1,0 +1,415 @@
+# API Conventions
+
+This is a Laravel REST API backend serving a React frontend. All endpoints follow these conventions.
+
+## Base URL
+
+- Development: `http://localhost:8000/api/v1`
+- Running on Docker Sail with PostgreSQL
+
+## Authentication (Laravel Sanctum)
+
+- Token-based authentication using Laravel Sanctum
+- Tokens stored in `personal_access_tokens` table
+- Frontend stores token in localStorage or cookies
+- Format: `Authorization: Bearer <token>` (in request header)
+- Automatically handles CSRF protection for same-domain requests
+- Token is issued on login and revoked on logout
+
+## Response Format
+
+**All responses must use the `ApiResponse` trait** for consistency.
+
+### Success Response
+
+```json
+{
+    "success": true,
+    "data": {
+        // response data
+    },
+    "message": "Operation successful"
+}
+```
+
+### Error Response
+
+```json
+{
+    "success": false,
+    "message": "Error description",
+    "errors": {
+        "field_name": ["validation error message"]
+    }
+}
+```
+
+## Validation
+
+**Use Form Request Classes** for all request validation. Never validate inline in controllers.
+
+### Form Request Class
+
+Create request classes in `app/Http/Requests/`:
+
+```php
+// app/Http/Requests/StoreJobListingRequest.php
+namespace App\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+
+class StoreJobListingRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        // Check if user is authorized (e.g., is employer)
+        return auth()->user()->employer()->exists();
+    }
+
+    public function rules(): array
+    {
+        return [
+            'title' => 'required|string|max:255',
+            'description' => 'required|string|min:50',
+            'requirements' => 'nullable|string',
+            'location' => 'required|string|max:255',
+            'employment_type' => 'required|in:full-time,part-time,contract',
+            'salary_min' => 'nullable|numeric|min:0',
+            'salary_max' => 'nullable|numeric|min:0|gte:salary_min',
+            'expires_at' => 'nullable|date|after:now',
+        ];
+    }
+
+    public function messages(): array
+    {
+        return [
+            'title.required' => 'Job title is required.',
+            'title.max' => 'Job title cannot exceed 255 characters.',
+            'description.required' => 'Job description is required.',
+            'description.min' => 'Job description must be at least 50 characters.',
+            'salary_max.gte' => 'Maximum salary must be greater than or equal to minimum salary.',
+            'expires_at.after' => 'Expiry date must be in the future.',
+        ];
+    }
+
+    public function attributes(): array
+    {
+        return [
+            'employment_type' => 'employment type',
+            'salary_min' => 'minimum salary',
+            'salary_max' => 'maximum salary',
+        ];
+    }
+}
+```
+
+### Controller Usage
+
+```php
+use App\Http\Requests\StoreJobListingRequest;
+use App\Traits\ApiResponse;
+
+class JobListingController extends Controller
+{
+    use ApiResponse;
+
+    // Validation is automatically performed before method is called
+    public function store(StoreJobListingRequest $request)
+    {
+        // $request->validated() returns only validated data
+        $job = JobListing::create($request->validated());
+        return $this->success($job, 'Job listing created', 201);
+    }
+}
+```
+
+### Error Response on Validation Failure
+
+When validation fails, Laravel automatically returns:
+
+```json
+{
+    "success": false,
+    "message": "Validation failed",
+    "errors": {
+        "title": ["Job title is required."],
+        "description": ["Job description must be at least 50 characters."],
+        "salary_max": [
+            "Maximum salary must be greater than or equal to minimum salary."
+        ]
+    }
+}
+```
+
+Status code: `422 Unprocessable Entity`
+
+### Comprehensive Error Messages
+
+Always provide:
+
+- **Field-specific messages** in `messages()` method
+- **User-friendly language** (avoid technical jargon)
+- **Actionable guidance** (tell user what to fix)
+- **Attribute names** in `attributes()` method (override generic names)
+
+❌ Bad:
+
+```php
+'email' => 'required|email'  // Generic message: "The email field is required."
+```
+
+✅ Good:
+
+```php
+public function rules(): array
+{
+    return [
+        'email' => 'required|email|unique:users',
+    ];
+}
+
+public function messages(): array
+{
+    return [
+        'email.required' => 'Please provide an email address.',
+        'email.email' => 'Please provide a valid email address.',
+        'email.unique' => 'This email address is already registered. Please login or use a different email.',
+    ];
+}
+```
+
+### Usage in Controllers
+
+```php
+use App\Traits\ApiResponse;
+
+class JobListingController extends Controller
+{
+    use ApiResponse;
+
+    public function store(StoreJobListingRequest $request)
+    {
+        $job = JobListing::create($request->validated());
+        return $this->success($job, 'Job listing created', 201);
+    }
+
+    public function show(JobListing $job)
+    {
+        return $this->success($job, 'Job listing retrieved');
+    }
+}
+```
+
+## HTTP Status Codes
+
+- `200 OK` - Successful GET/PUT/PATCH
+- `201 Created` - Successful POST (resource created)
+- `204 No Content` - Successful DELETE
+- `400 Bad Request` - Validation errors
+- `401 Unauthorized` - Missing/invalid authentication
+- `403 Forbidden` - User lacks permission
+- `404 Not Found` - Resource doesn't exist
+- `500 Internal Server Error` - Server error
+
+## Pagination
+
+- Default limit: 15 items
+- Query params: `?page=1&limit=25`
+- Response includes `total`, `per_page`, `current_page`, `last_page`
+
+## Filtering & Searching
+
+- Use query params for simple filters: `?status=open&location=NYC`
+- Combine multiple filters with `&`
+
+## Naming Conventions
+
+- Routes: lowercase, plural, hyphenated (`/api/v1/job-listings`)
+- Response fields: snake_case (`company_name`, `job_listing_id`)
+- Query params: snake_case (`employment_type`, `salary_min`)
+
+## Route Model Binding
+
+**Always use Route Model Binding** instead of passing `{id}` parameters.
+
+```php
+// ✅ CORRECT - Route model binding
+Route::get('/job-listings/{jobListing}', [JobListingController::class, 'show']);
+Route::put('/job-listings/{jobListing}', [JobListingController::class, 'update']);
+
+// ❌ WRONG - Manual ID lookup
+Route::get('/job-listings/{id}', [JobListingController::class, 'show']);
+```
+
+Model binding automatically:
+
+- Resolves the model from DB using the ID
+- Returns 404 if not found
+- Type-hints the model in controller method
+- Prevents invalid IDs from reaching business logic
+
+```php
+// In controller
+public function show(JobListing $jobListing)  // Auto-resolved from route parameter
+{
+    return $this->success($jobListing);
+}
+```
+
+## Resource Endpoints
+
+### Users
+
+- `POST /api/v1/auth/register` - Register new user
+- `POST /api/v1/auth/login` - Login
+- `POST /api/v1/auth/logout` - Logout
+- `GET /api/v1/users/me` - Get authenticated user profile
+
+### Employers
+
+- `POST /api/v1/employers` - Create employer profile
+- `GET /api/v1/employers/{employer}` - Get employer details (route model binding)
+- `PUT /api/v1/employers/{employer}` - Update employer profile (route model binding)
+
+### Candidates
+
+- `POST /api/v1/candidates` - Create candidate profile
+- `GET /api/v1/candidates/{candidate}` - Get candidate details (route model binding)
+- `PUT /api/v1/candidates/{candidate}` - Update candidate profile (route model binding)
+
+### Job Listings
+
+- `GET /api/v1/job-listings` - List all jobs (paginated, filterable)
+- `POST /api/v1/job-listings` - Create job (employer only)
+- `GET /api/v1/job-listings/{jobListing}` - Get job details (route model binding)
+- `PUT /api/v1/job-listings/{jobListing}` - Update job (route model binding, employer only)
+- `DELETE /api/v1/job-listings/{jobListing}` - Delete job (route model binding, employer only)
+
+### Applications
+
+- `POST /api/v1/applications` - Apply for job
+- `GET /api/v1/applications` - Get my applications
+- `GET /api/v1/applications/{application}` - Get application details (route model binding)
+- `PATCH /api/v1/applications/{application}/status` - Update application status (route model binding, employer only)
+
+### Saved Jobs
+
+- `POST /api/v1/saved-jobs` - Save a job
+- `DELETE /api/v1/saved-jobs/{savedJob}` - Remove saved job (route model binding)
+- `GET /api/v1/candidates/{candidate}/saved-jobs` - Get candidate's saved jobs (route model binding)
+
+### Categories
+
+- `GET /api/v1/categories` - List all categories
+- `POST /api/v1/categories` - Create category (admin only)
+
+## Timestamps
+
+- `created_at` - ISO 8601 format (auto-managed)
+- `updated_at` - ISO 8601 format (auto-managed)
+- `applied_at` - When application was submitted
+- `reviewed_at` - When application was reviewed
+
+## Validation Rules
+
+- Email must be unique and valid format
+- Password minimum 8 characters
+- Required fields depend on endpoint (documented in controller comments)
+
+## Authentication Flow (Sanctum)
+
+### Register
+
+```
+POST /api/v1/auth/register
+Body: { first_name, last_name, email, password }
+Response: { success: true, data: { user, token } }
+```
+
+### Login
+
+```
+POST /api/v1/auth/login
+Body: { email, password }
+Response: { success: true, data: { user, token } }
+Token is returned and stored by frontend in localStorage
+```
+
+### Logout
+
+```
+POST /api/v1/auth/logout
+Header: Authorization: Bearer <token>
+Response: { success: true, message: "Logged out successfully" }
+Token is revoked on backend
+```
+
+### Protected Routes
+
+All routes requiring authentication must include:
+
+```
+Authorization: Bearer <token>
+```
+
+Unauthenticated requests to protected routes return `401 Unauthorized`
+
+## Rate Limiting
+
+- Future: Implement rate limiting per user/IP
+
+## Testing
+
+All endpoints must have corresponding Pest tests in `tests/Feature/`.
+
+### Test Structure
+
+```php
+// tests/Feature/JobListingTest.php
+use Tests\TestCase;
+
+class JobListingTest extends TestCase
+{
+    public function test_can_view_all_job_listings()
+    {
+        $response = $this->getJson('/api/v1/job-listings');
+        $response->assertStatus(200)
+                 ->assertJsonStructure(['success', 'data', 'message']);
+    }
+
+    public function test_authenticated_employer_can_create_job()
+    {
+        $employer = User::factory()->create();
+        $employer->employer()->create(['company_name' => 'Test Co']);
+
+        $response = $this->actingAs($employer)
+                        ->postJson('/api/v1/job-listings', [
+                            'title' => 'Test Job',
+                            'description' => 'Test Description',
+                        ]);
+
+        $response->assertStatus(201)
+                 ->assertJsonPath('data.title', 'Test Job');
+    }
+
+    public function test_unauthenticated_cannot_create_job()
+    {
+        $response = $this->postJson('/api/v1/job-listings', []);
+        $response->assertStatus(401);
+    }
+}
+```
+
+### Testing Best Practices
+
+- Test happy path (success scenario)
+- Test validation failures
+- Test authentication/authorization
+- Test edge cases
+- Use factories for test data
+- Mock external services
+
+## Versioning
+
+- Currently v1 (`/api/v1`)
+- When breaking changes occur, create v2 endpoints

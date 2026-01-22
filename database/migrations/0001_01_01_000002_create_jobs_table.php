@@ -50,8 +50,8 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('jobs');
-        Schema::dropIfExists('job_batches');
-        Schema::dropIfExists('failed_jobs');
+        Schema::dropIfExists('queued_jobs');
+        Schema::dropIfExists('queued_job_batches');
+        Schema::dropIfExists('queued_failed_jobs');
     }
 };
